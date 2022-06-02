@@ -1,0 +1,520 @@
+#include <LiquidCrystal.h>	
+// LiquidCrystal display
+
+LiquidCrystal lcd(2, 3, 4, 5, 6, 7, 8); // define display pins
+
+const int choiceBtn_1 = 12;  	//Serial.read(); //user choice
+const int choiceBtn_2 = 13;
+
+//Declaration for Truck racer
+const int BUTTON_ENTER = 10;
+const int BUTTON_SELECT = 11;
+
+// Steering wheel potentiometer
+const int POTPIN = 1;
+const int MAXPOT = 800; // no need to turn the wheel all the way to 1023 :)
+
+// Piezo speaker
+const int SPEAKERPIN = 9;
+
+const int RANDSEEDPIN = 0; // an analog pin that isn't connected to anything
+
+const int MAXSTEPDURATION = 300; // Start slowly, each step is 1 millisec shorter.
+const int MINSTEPDURATION = 150; // This is as fast as it gets
+
+const int NGLYPHS = 6;
+
+// Trucks ahead 
+// the glyphs will be defined starting from 1 (not 0),
+// to enable lcd.print() of null-terminated strings
+byte glyphs[NGLYPHS][8] = {
+  // 1: car up
+  { B00000,
+    B01110,
+    B11111,
+    B01010,
+    B00000,
+    B00000,
+    B00000,
+    B00000}
+  // 2: car down
+  ,{B00000,
+    B00000,
+    B00000,
+    B00000,
+    B01110,
+    B11111,
+    B01010,
+    B00000}
+  // 3: truck up
+  ,{B00000,
+    B11110,
+    B11111,
+    B01010,
+    B00000,
+    B00000,
+    B00000,
+    B00000}
+  // 4: truck down
+  ,{B00000,
+    B00000,
+    B00000,
+    B00000,
+    B11110,
+    B11111,
+    B01010,
+    B00000}
+  // 5: crash up
+  ,{B10101,
+    B01110,
+    B01110,
+    B10101,
+    B00000,
+    B00000,
+    B00000,
+    B00000}
+  // 6: crash down
+  ,{B00000,
+    B00000,
+    B00000,
+    B10101,
+    B01110,
+    B01110,
+    B10101,
+    B00000}
+};
+
+const int NCARPOSITIONS = 4;
+
+// Each position is mapped to a column of 2 glyphs
+// Used to make sense when I had a 5th position
+// where car or crash was drawn as 2 glyphs
+// (can't do that since 0 terminates strings),
+// so it's kinda silly now, but it ain't broke :)
+const char BLANK=32;
+char car2glyphs[NCARPOSITIONS][2] = {
+  {1,BLANK},{2,BLANK},{BLANK,1},{BLANK,2}
+};
+char truck2glyphs[NCARPOSITIONS][2] = {
+  {3,BLANK},{4,BLANK},{BLANK,3},{BLANK,4}
+};
+char crash2glyphs[NCARPOSITIONS][2] = {
+  {5,BLANK},{6,BLANK},{BLANK,5},{BLANK,6}
+};
+
+const int ROADLEN = 15; // LCD width (not counting our car)
+int road[ROADLEN]; // positions of other cars
+char road_buff[2+ROADLEN]; // aux string for drawRoad()
+int road_index;
+int car_pos;
+// Off-the-grid position means empty column, so MAXROADPOS
+// determines the probability of a car in a column
+// e.g. 3*NCARPOSITIONS gives p=1/3
+const int MAXROADPOS = 3*NCARPOSITIONS;
+int step_duration;
+
+int crash; // true if crashed
+unsigned int crashtime; // millis() when crashed
+const int CRASHSOUNDDURATION = 250;
+int choice = 1;//user Choice
+const char *INTRO1="Trucks ahead,";
+const char *INTRO2="Drive carefully";
+const int INTRODELAY = 2000;
+
+
+// Declarations for Dino Jump
+//bitmap array for the dino character
+byte dino [8]
+{ B00000,
+  B00111,
+  B00101,
+  B10111,
+  B11100,
+  B11111,
+  B01101,
+  B01100,
+};
+
+//character for the tree
+byte tree [8]
+{
+  B00011,
+  B11011,
+  B11011,
+  B11011,
+  B11011,
+  B11111,
+  B01110,
+  B01110
+};
+
+
+const int MENU_SIZE = 2;
+const int LCD_COLUMN = 16;
+
+const int TREE_CHAR = 6;
+const int DINO_CHAR = 7;
+
+const String ALPHABET[26] = { "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z" };
+
+boolean isPlaying = false;
+boolean isShowScore = false;
+boolean isDinoOnGround = true;
+
+int currentIndexMenu = 0;
+int score = 0;
+int scoreListSize = 0;
+String scoreList[20];
+
+
+
+
+
+void setup(){
+  
+  lcd.print("Press 1 or 2");
+  
+  delay(2000);
+  
+  
+  if (choice == 1){
+    truckRacer();
+  }
+  
+  else if (choice == 2){
+  	dinoJump();
+  }
+
+}
+
+void loop() {
+
+  
+  
+  // Load Loops according to game
+  if (choice == 1){
+    unsigned long now = millis()-INTRODELAY;
+    if (!crash) {
+      getSteeringWheel();
+      crash = (car_pos==road[road_index]);
+    }
+    if (crash) {
+      if (!crashtime) {
+        crashtime=now;
+        drawRoad();
+        // Game over text
+        // (keep first 2 "crash" columns intact)
+        lcd.setCursor(2,0);
+        lcd.print("Crashed after");
+        lcd.setCursor(2,1);
+        lcd.print(now/1000);
+        lcd.print(" seconds.");
+      }
+      if ((now-crashtime)<CRASHSOUNDDURATION) {
+        analogWrite(SPEAKERPIN,random(255)); // white noise
+      } 
+      else {
+        analogWrite(SPEAKERPIN,0); // dramatic post-crush silence :)   
+      }
+      delay(10); // Wait a bit between writes
+    } 
+    else {
+
+      int prev_pos = road[(road_index-1)%ROADLEN];
+      int this_pos = random(MAXROADPOS);
+      while (abs(this_pos-prev_pos)<2) { // don't jam the road
+        this_pos = random(MAXROADPOS);
+      }
+      road[road_index] = this_pos;
+      road_index = (road_index+1)%ROADLEN;
+      drawRoad();
+      delay(step_duration);
+      if (step_duration>MINSTEPDURATION) {
+        step_duration--; // go faster
+      }
+    }
+  } //End if
+  
+  else if(choice == 2){
+  	// loop for DinoJump
+    lcd.clear();
+    handleMenu();
+    delay(300);
+  } //End else if
+  
+}//End Loop
+
+
+
+void truckRacer(){
+  
+  crash = crashtime = road_index = 0;
+  step_duration = MAXSTEPDURATION;
+  road_buff[1+ROADLEN] = '\0'; // null terminate it
+  randomSeed(analogRead(RANDSEEDPIN));
+  for (int i=0; i<NGLYPHS; i++) {
+    lcd.createChar(i+1,glyphs[i]);
+  }
+  for (int i=0; i<ROADLEN; i++) {
+    road[i]=-1;
+  }
+  pinMode(SPEAKERPIN,OUTPUT);
+  analogWrite(SPEAKERPIN,0); // to be on the safe side
+  lcd.begin(16,2);
+  getSteeringWheel();
+  drawRoad();
+  lcd.setCursor(1,0);
+  lcd.print(INTRO1);
+  lcd.setCursor(1,1);
+  lcd.print(INTRO2);
+  delay(INTRODELAY);
+  
+}
+
+
+
+
+
+
+
+
+void getSteeringWheel() {
+  car_pos = map(analogRead(POTPIN),0,1024,0,NCARPOSITIONS);
+}
+
+void drawRoad() {
+  for (int i=0; i<2; i++) {
+    if (crash) {
+      road_buff[0]=crash2glyphs[car_pos][i];
+    } 
+    else {
+      road_buff[0]=car2glyphs[car_pos][i];
+    }
+    for (int j=0; j<ROADLEN; j++) {
+      int pos = road[(j+road_index)%ROADLEN];
+      road_buff[j+1] = pos>=0 && pos<NCARPOSITIONS ? truck2glyphs[pos][i] : BLANK;
+    }
+    lcd.setCursor(0,i);
+    lcd.print(road_buff);
+  }
+}
+
+
+
+
+void dinoJump(){
+  lcd.begin(16, 2);
+  lcd.createChar(DINO_CHAR, dino);
+  lcd.createChar(TREE_CHAR, tree);
+
+  Serial.begin(9600);
+  pinMode(BUTTON_ENTER, INPUT_PULLUP);
+  pinMode(BUTTON_SELECT, INPUT_PULLUP);
+}
+
+void handleMenu() {
+  String menu[MENU_SIZE] = { "START", "SCORE" };
+
+  for (int i = 0; i < MENU_SIZE; i++) {
+    if (i == currentIndexMenu) {
+      lcd.setCursor(0, i);
+      lcd.print("-> ");
+    }
+
+    lcd.setCursor(3, i);
+    lcd.print(menu[i]);
+  }
+
+  if (digitalRead(BUTTON_SELECT) == LOW) {
+    currentIndexMenu = currentIndexMenu == 0 ? 1 : 0;
+  }
+
+  if (digitalRead(BUTTON_ENTER) == LOW) {
+    currentIndexMenu == 0 ? startGame() : showScore();
+  }
+}
+
+void showScore () {
+  isShowScore = true;
+  delay(200);
+  int currentIndex = 0;
+  const int lastIndex = scoreListSize - 1;
+
+  printScore(currentIndex, lastIndex);
+
+  while (isShowScore) {
+    if (digitalRead(BUTTON_SELECT) == LOW) {
+      currentIndex = currentIndex < lastIndex ? currentIndex + 1 : 0;
+      printScore(currentIndex, lastIndex);
+    }
+
+    if (digitalRead(BUTTON_ENTER) == LOW) {
+      isShowScore = false;
+    }
+
+    delay(200);
+  }
+}
+
+void printScore(int index, int lastIndex) {
+  lcd.clear();
+
+  if (lastIndex == -1) {
+    lcd.print("NO SCORE");
+  }
+  else {
+    lcd.print(scoreList[index]);
+
+    if (index < lastIndex) {
+      lcd.setCursor(0, 1);
+      lcd.print(scoreList[index + 1]);
+    }
+  }
+}
+
+void startGame () {
+  isPlaying = true;
+
+  while (isPlaying) {
+    handleGame();
+  }
+}
+
+void handleGame() {
+  lcd.clear();
+
+  int buttonPressedTimes = 0;
+
+  // Generate two random distances for the space between the trees
+  int secondPosition = random(4, 9);
+  int thirdPosition = random(4, 9);
+  int firstTreePosition = LCD_COLUMN;
+
+  const int columnValueToStopMoveTrees = -(secondPosition + thirdPosition);
+
+  // this loop is to make the trees move, this loop waiting until
+  // all the trees moved
+  for (; firstTreePosition >= columnValueToStopMoveTrees; firstTreePosition--) {
+
+    lcd.setCursor(13, 0);
+    lcd.print(score);
+
+    defineDinoPosition();
+
+    int secondTreePosition = firstTreePosition + secondPosition;
+    int thirdTreePosition = secondTreePosition + thirdPosition;
+
+    showTree(firstTreePosition);
+    showTree(secondTreePosition);
+    showTree(thirdTreePosition);
+
+    if (isDinoOnGround) {
+      if (firstTreePosition == 1 || secondTreePosition == 1 || thirdTreePosition == 1) {
+        handleGameOver();
+        delay(5000);
+        break;
+      }
+      buttonPressedTimes = 0;
+
+    } else {
+      if (buttonPressedTimes > 3) {
+        score -= 3;
+      }
+
+      buttonPressedTimes++;
+    }
+
+    score++;
+    delay(500);
+    
+  } //End For
+}// End of Function
+
+
+
+void handleGameOver () {
+  lcd.clear();
+  lcd.print("GAME OVER");
+
+  lcd.setCursor(0, 1);
+  lcd.print("SCORE: ");
+  lcd.print(score);
+
+  delay(2000);
+  saveScore();
+}
+
+
+
+void saveScore () {
+  lcd.clear();
+
+  String nick = "";
+  int nameSize = 0;
+  int alphabetCurrentIndex = 0;
+
+  lcd.print("TYPE YOUR NAME");
+
+  while (nameSize != 3) {
+    lcd.setCursor(nameSize, 1);
+    lcd.print(ALPHABET[alphabetCurrentIndex]);
+
+    if (digitalRead(BUTTON_SELECT) == LOW) {
+      alphabetCurrentIndex = alphabetCurrentIndex != 25 ? alphabetCurrentIndex + 1 : 0;
+    }
+
+    if (digitalRead(BUTTON_ENTER) == LOW) {
+      nick += ALPHABET[alphabetCurrentIndex];
+
+      nameSize++;
+      alphabetCurrentIndex = 0;
+    }
+
+    delay(300);
+  } //End of While
+ 
+  scoreList[scoreListSize] =  nick + " " + score;
+  scoreListSize++;
+
+  isPlaying = false;
+  score = 0;
+} // End of Function
+
+
+
+void showTree (int position) {
+  lcd.setCursor(position, 1);
+  lcd.write(TREE_CHAR);
+
+  // clean the previous position
+  lcd.setCursor(position + 1, 1);
+  lcd.print(" ");
+}
+
+
+
+void defineDinoPosition () {
+  int buttonState = digitalRead(BUTTON_ENTER);
+  buttonState == HIGH ? putDinoOnGround() : putDinoOnAir();
+}
+
+
+void putDinoOnGround () {
+  lcd.setCursor(1, 1);
+  lcd.write(DINO_CHAR);
+  lcd.setCursor(1, 0);
+  lcd.print(" ");
+
+  isDinoOnGround = true;
+}
+
+
+
+void putDinoOnAir () {
+  lcd.setCursor(1, 0);
+  lcd.write(DINO_CHAR);
+  lcd.setCursor(1, 1);
+  lcd.print(" ");
+
+  isDinoOnGround = false;
+}
